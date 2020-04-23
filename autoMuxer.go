@@ -6,13 +6,14 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"regexp"
 
 	"github.com/Galdoba/utils"
+	"github.com/macroblock/imed/pkg/tagname"
 )
 
 const (
@@ -217,6 +218,16 @@ func (t *Task) predictSubsFile() (subs string) {
 	return "sync_" + t.outFullName + "_.srt"
 }
 
+func initStatus() {
+	args := dataLineArgs(activeTask)
+	newDl := "TaskStatus-0 " + strings.Join(args, " ")
+	editActiveTaskLine(newDl)
+}
+
+func editActiveTaskLine(newLine string) {
+	utils.EditLineInFile(taskFilePath, activeTask, newLine)
+}
+
 func newTask(dataLine string) *Task {
 	task := &Task{}
 	task.dataLine = dataLine
@@ -224,6 +235,10 @@ func newTask(dataLine string) *Task {
 	args := dataLineArgs(activeTask)
 	err := checkArgs(args)
 	if err != nil {
+		if err.Error() == "Status Unknown" {
+			initStatus()
+		}
+
 		if err.Error() != "Task Done" {
 			fmt.Println(args)
 			fmt.Println(err)
@@ -288,6 +303,7 @@ func taskFileReadable() bool {
 
 func dataLineArgs(i int) []string {
 	lines := utils.LinesFromTXT(taskFilePath)
+
 	args := strings.Split(lines[i], " ")
 	return args
 }
@@ -327,6 +343,10 @@ func validateTag(tag string, whiteList []string) bool {
 }
 
 func checkArgs(args []string) error {
+	if len(args) == 4 {
+		return errors.New("Status Unknown")
+	}
+
 	if len(args) != 5 {
 		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " have " + strconv.Itoa(len(args)) + " arguments (expecting 5)")
 	}
@@ -338,13 +358,38 @@ func checkArgs(args []string) error {
 	}
 	fmt.Println("StatusArg:", args[0], "ok")
 
-	fmt.Println("ResultArg:", args[1]
-	if !isTimeStamp(args[2]) {
-		
+	fmt.Println("ResultArg:", args[1])
+
+	_, err := tagname.NewFromFilename(args[1], tagname.CheckNormal)
+	if err != nil {
+		if err.Error() == "\x22sdhd\x22 type does not exist" {
+			return errors.New("Error: Task " + strconv.Itoa(activeTask) + " sdhd tag INVALID")
+		}
+		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " " + err.Error())
 	}
-	arg2 := isTimeStamp(args[2])
-	arg3 := isTimeStamp(args[3])
-	fmt.Println("arg2 arg3:", arg2, arg3)
+	// atag, err := tn.GetTag("atag")
+	// if err != nil {
+	// 	return err
+	// }
+	//tag, errsdhd := tn.GetTag("sdhd")
+	//fmt.Println("-------------tag", tag)
+	// if errsdhd != nil {
+	// 	panic("New Error")
+	// 	return errors.New("Error: Task " + strconv.Itoa(activeTask) + " tag 'sdhd' not detected")
+	// }
+	// fmt.Println(tag)
+	//fmt.Println(atag)
+
+	if !isTimeStamp(args[2]) {
+		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " - args[2] [" + args[2] + "] is INVALID")
+	}
+	if !isTimeStamp(args[3]) {
+		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " - args[3] [" + args[3] + "] is INVALID")
+	}
+
+	if !fileAvailableM(inFolder, args[4]) {
+		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " - args[3] [" + args[4] + "] inFile is not available")
+	}
 
 	return nil
 }
@@ -626,10 +671,10 @@ func exe_cmd(cmd string, wg *sync.WaitGroup) {
 }
 
 func isTimeStamp(arg string) bool {
-	match, err := regexp.MatchString("[0-9][0-9]:[0-9][0-9]:[0-9][0-9]:[0-9][0-9]", arg)
-    if err != nil {
-fmt.Println(err.Error())
-return false
-	}
+	match, _ := regexp.MatchString("[0-9][0-9]:[0-9][0-9]:[0-9][0-9]:[0-9][0-9]", arg)
+	//     if err != nil {
+	// fmt.Println(err.Error())
+	// return false
+	// 	}
 	return match
 }
