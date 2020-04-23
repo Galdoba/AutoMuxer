@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"regexp"
 
 	"github.com/Galdoba/utils"
 )
@@ -21,15 +23,15 @@ const (
 	outPrefix    = "OUT_"
 	senderPrefix = "SENDER_"
 	taskFile     = "_TaskFile.txt"
-	taskCon0     = "TaskCon-0"
-	taskCon1     = "TaskCon-1"
-	taskCon2     = "TaskCon-2"
-	taskCon3     = "TaskCon-3"
-	taskCon4     = "TaskCon-4"
-	taskCon5     = "TaskCon-5"
-	taskCon6     = "TaskCon-6"
-	taskCon7     = "TaskCon-7"
-	taskDone     = "TaskCon-DONE"
+	taskCon0     = "TaskStatus-0"
+	taskCon1     = "TaskStatus-1"
+	taskCon2     = "TaskStatus-2"
+	taskCon3     = "TaskStatus-3"
+	taskCon4     = "TaskStatus-4"
+	taskCon5     = "TaskStatus-5"
+	taskCon6     = "TaskStatus-6"
+	taskCon7     = "TaskStatus-7"
+	taskDone     = "TaskStatus-DONE"
 )
 
 var startTime time.Time
@@ -37,6 +39,7 @@ var inFolder string
 var outFolder string
 var senderFolder string
 var taskFilePath string
+var activeTask int
 
 func check(e error) {
 	if e != nil {
@@ -181,12 +184,54 @@ func mapTags(arg string) map[string]string {
 	return tagMap
 }
 
+func (t *Task) predictAudioFiles() (audio1, audio2 string) {
+	switch t.outputTags["audioTag"] {
+	case "ar2":
+		audio1 = t.outBaseName + "_rus20"
+	case "ae2":
+		audio1 = t.outBaseName + "_eng20"
+	case "ar6":
+		audio1 = t.outBaseName + "_rus51"
+	case "ae6":
+		audio1 = t.outBaseName + "_eng51"
+	case "ar2e2":
+		audio1 = t.outBaseName + "_rus20"
+		audio2 = t.outBaseName + "_eng20"
+	case "ar2e6":
+		audio1 = t.outBaseName + "_rus20"
+		audio2 = t.outBaseName + "_eng51"
+	case "ar6e2":
+		audio1 = t.outBaseName + "_rus51"
+		audio2 = t.outBaseName + "_eng20"
+	case "ar6e6":
+		audio1 = t.outBaseName + "_rus51"
+		audio2 = t.outBaseName + "_eng51"
+	}
+	return audio1, audio2
+}
+
+func (t *Task) predictSubsFile() (subs string) {
+	if t.outputTags["subsTag"] == "[NO_SUBS]" {
+		return ""
+	}
+	return "sync_" + t.outFullName + "_.srt"
+}
+
 func newTask(dataLine string) *Task {
 	task := &Task{}
 	task.dataLine = dataLine
 	task.outputTags = make(map[string]string)
-	args := task.args()
-	task.prResolutionTag, task.prAudioTag, task.prSubTag = searchTags(args[1])
+	args := dataLineArgs(activeTask)
+	err := checkArgs(args)
+	if err != nil {
+		if err.Error() != "Task Done" {
+			fmt.Println(args)
+			fmt.Println(err)
+		}
+		task.status = -1
+		return task
+	}
+	fmt.Println("activeTask", activeTask)
 	task.outDurat = args[2]
 	task.offset = args[3]
 	task.inVideo = inFolder + "\\" + args[4]
@@ -234,37 +279,10 @@ func (task *Task) Info() {
 	fmt.Println("status      int", task.status)
 }
 
-func formTask(line string) []string {
-	return []string{}
-}
-
 func taskFileReadable() bool {
 	if !fileAvailableM(inFolder, taskFile) {
 		return false
 	}
-	// fileLines := utils.LinesFromTXT(taskFilePath)
-	// for i, _ := range fileLines {
-	// 	if fileLines[i] == "" {
-	// 		continue
-	// 	}
-	// 	args := dataLineArgs(i)
-	// 	if !statusValid(args[0]) {
-	// 		utils.EditLineInFile(taskFilePath, i, "TaskCon-0 "+fileLines[i])
-	// 	}
-
-	// 	fmt.Println("DEBUG: line", i, "    Status valid =", statusValid(args[0]))
-	// 	if len(args) != 5 {
-	// 		fmt.Println("Error: line", i, "    Has", len(args), "arguments!")
-	// 		for e := range args {
-	// 			fmt.Println("  Arg", e, "'"+args[e]+"'")
-	// 		}
-	// 		fmt.Println("")
-	// 		continue
-	// 	}
-	// 	// fmt.Println(dataline)
-	// 	// fmt.Println(args)
-	// 	// fmt.Println("------")
-	// }
 	return true
 }
 
@@ -308,51 +326,40 @@ func validateTag(tag string, whiteList []string) bool {
 	return false
 }
 
-func searchTags(arg string) (resolutionTag string, audioTag string, subsTag string) {
-	resolutionTag = "INVALID"
-	audioTag = "INVALID"
-	subsTag = "INVALID"
-	argParts := strings.Split(arg, "__")
-	tags := strings.Split(argParts[1], "_")
-	if len(tags) == 2 {
-		subsTag = "[NO_SUBS]"
-	}
-	for i := range tags {
-		switch i {
-		default:
-			fmt.Println("Err??", tags[i])
-		case 0:
-			if validateTag(tags[i], resolutionTagWL()) {
-				resolutionTag = tags[i]
-			}
-		case 1:
-			if validateTag(tags[i], audioTagWL()) {
-				audioTag = tags[i]
-			}
-		case 2:
-			if validateTag(tags[i], subsTagWL()) {
-				subsTag = tags[i]
-			}
-		}
-	}
-
-	return resolutionTag, audioTag, subsTag
-}
-
-func checkArgs(args []string) bool {
+func checkArgs(args []string) error {
 	if len(args) != 5 {
-		fmt.Println("Error:", args, "have", len(args), "arguments (expecting 5)")
-		return false
+		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " have " + strconv.Itoa(len(args)) + " arguments (expecting 5)")
 	}
-	fmt.Println("StatusArg:", args[0])
+	if !statusValid(args[0]) {
+		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " have INVALID status")
+	}
+	if args[0] == taskDone {
+		return errors.New("Task Done")
+	}
+	fmt.Println("StatusArg:", args[0], "ok")
 
-	fmt.Println("ResultArg:", args[1])
-	rTag, aTag, sTag := searchTags(args[1])
-	fmt.Println("     Tags:", rTag, aTag, sTag)
-	return true
+	fmt.Println("ResultArg:", args[1]
+	if !isTimeStamp(args[2]) {
+		
+	}
+	arg2 := isTimeStamp(args[2])
+	arg3 := isTimeStamp(args[3])
+	fmt.Println("arg2 arg3:", arg2, arg3)
+
+	return nil
 }
 
 func main() {
+
+	// file := "word1_word2_partNum_0000__hd_ar2e6_sr"
+
+	// tn, err := tagname.NewFromFilename(file, tagname.CheckNormal)
+	// tag, err2 :=tn.GetTag("atag")
+	// fmt.Println(tag)
+	// fmt.Println(err)
+	// fmt.Println(err2)
+	// return
+
 	preCheck()
 	if !taskFileReadable() {
 		fmt.Println("TaskFile is not readable...")
@@ -363,13 +370,26 @@ func main() {
 		time.Sleep(time.Second * 3)
 		utils.ClearScreen()
 		curTime := time.Now()
+		activeTask = 0
 		fmt.Println("cycle", i)
 		fmt.Println("Start time :", startTime)
 		fmt.Println("Curent time:", curTime)
+		fmt.Println("")
 		dataLines := dataLines()
-		for i := range dataLines {
-			task := newTask(dataLines[i])
+		for dl := range dataLines {
+			fmt.Println("	Task", dl, dataLines[dl])
+			activeTask = dl
+			task := newTask(dataLines[dl])
+			if task.status < 0 {
+				continue
+			}
+			// if err != nil {
+			// 	fmt.Println(task, "-------------------------")
+			// 	continue
+			// }
+			fmt.Println("---------")
 			task.Info()
+			fmt.Println("---------")
 		}
 
 	}
@@ -603,4 +623,13 @@ func exe_cmd(cmd string, wg *sync.WaitGroup) {
 	}
 	fmt.Printf("%s", out)
 	wg.Done() // Need to signal to waitgroup that this goroutine is done
+}
+
+func isTimeStamp(arg string) bool {
+	match, err := regexp.MatchString("[0-9][0-9]:[0-9][0-9]:[0-9][0-9]:[0-9][0-9]", arg)
+    if err != nil {
+fmt.Println(err.Error())
+return false
+	}
+	return match
 }
