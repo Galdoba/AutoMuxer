@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Galdoba/utils"
-	"github.com/macroblock/imed/pkg/tagname"
 )
 
 const (
@@ -135,22 +134,19 @@ func createTaskFile() {
 }
 
 type Task struct {
-	dataLine        string
-	inVideo         string
-	inDurat         string
-	offset          string
-	prVideo         string
-	prAudio         []string
-	prSubs          string
-	prResolutionTag string
-	prAudioTag      string
-	prSubTag        string
-	outBaseName     string
-	outFullName     string
-	outDurat        string
-	status          int
-	inFilePos       int
-	outputTags      map[string]string
+	dataLine    string
+	inVideo     string
+	inDurat     string
+	offset      string
+	prVideo     string
+	prAudio     []string
+	prSubs      string
+	outBaseName string
+	outFullName string
+	outDurat    string
+	status      int
+	inFilePos   int
+	outputTags  map[string]string
 }
 
 func mapTags(arg string) map[string]string {
@@ -208,6 +204,10 @@ func (t *Task) predictAudioFiles() (audio1, audio2 string) {
 		audio1 = t.outBaseName + "_rus51"
 		audio2 = t.outBaseName + "_eng51"
 	}
+	t.prAudio = append(t.prAudio, audio1+".ac3")
+	if audio2 != "" {
+		t.prAudio = append(t.prAudio, audio2+".ac3")
+	}
 	return audio1, audio2
 }
 
@@ -215,6 +215,7 @@ func (t *Task) predictSubsFile() (subs string) {
 	if t.outputTags["subsTag"] == "[NO_SUBS]" {
 		return ""
 	}
+	t.prSubs = "sync_" + t.outFullName + "_.srt"
 	return "sync_" + t.outFullName + "_.srt"
 }
 
@@ -238,7 +239,6 @@ func newTask(dataLine string) *Task {
 		if err.Error() == "Status Unknown" {
 			initStatus()
 		}
-
 		if err.Error() != "Task Done" {
 			fmt.Println(args)
 			fmt.Println(err)
@@ -249,15 +249,78 @@ func newTask(dataLine string) *Task {
 	fmt.Println("activeTask", activeTask)
 	task.outDurat = args[2]
 	task.offset = args[3]
-	task.inVideo = inFolder + "\\" + args[4]
-	task.outputTags = mapTags(args[1])
+	if fileAvailableM(inFolder, args[1]) {
+		task.inVideo = args[1]
+		task.inDurat = videoDuration(inFolder, args[1])
+	}
+
+	task.outputTags = mapTags(args[4])
+
 	task.outBaseName = task.outputTags["name"] + "_" +
 		task.outputTags["year"] + "__" +
-		task.outputTags["resolutionTag"] + "_"
-	task.outFullName = args[1]
+		task.outputTags["resolutionTag"]
+	task.prVideo = "cut_" + task.outBaseName + ".mp4"
+	task.outFullName = args[4]
+	task.predictAudioFiles()
+	task.predictProcessFiles()
+	task.predictSubsFile()
 	//fmt.Println("Test status", readStatus(dataLine))
 	//task.Info()
+
 	return task
+}
+
+func (t *Task) CheckStatus() {
+	fmt.Println(t.outFullName, "Status:", t.status)
+	if t.status < 0 {
+		return
+	}
+	time.Sleep(time.Second)
+	if t.status == 0 {
+		t.Info()
+		if !fileAvailableM(inFolder, t.inVideo) {
+			return
+		}
+		if fileAvailableM(outFolder, t.prVideo) {
+			if videoDuration(outFolder, t.prVideo) == t.outDurat {
+				fmt.Println(outFolder+"\\"+t.prVideo, "VALID")
+				fmt.Println(t.outFullName, "set status 1")
+				changeStatusInFile(taskCon1, t.outFullName)
+				t.status = 1
+			}
+		}
+	}
+	pr := printer{defaultColor: "red"}
+	if t.status == 1 {
+		for i, audio := range t.prAudio {
+			if !fileAvailableM(outFolder, t.prAudio[i]) {
+				fmt.Println(audio, "is not available!")
+			}
+			fmt.Println(outFolder+"\\"+t.prAudio[i], utils.ASCIIColor("green", "VALID"))
+			pr.PrintLine("Testststst")
+		}
+	}
+
+	panic(t.status)
+}
+
+type cPrinter interface {
+	PrintLine(string)
+	SetColor(string)
+}
+
+type printer struct {
+	defaultColor string
+}
+
+func (pr *printer) PrintLine(line string) {
+	fmt.Println(utils.ASCIIColor(pr.defaultColor, line))
+}
+
+func (task *Task) predictProcessFiles() {
+	if task.outBaseName == "" {
+		panic("BASE NAME")
+	}
 }
 
 func (task *Task) args() []string {
@@ -285,9 +348,6 @@ func (task *Task) Info() {
 	fmt.Println("prVideo     string", task.prVideo)
 	fmt.Println("prAudio     []string", task.prAudio)
 	fmt.Println("prSubs      string", task.prSubs)
-	fmt.Println("prResTags   string", task.prResolutionTag)
-	fmt.Println("prAudTags   string", task.prAudioTag)
-	fmt.Println("prSubTags   string", task.prSubTag)
 	fmt.Println("outBaseName string", task.outBaseName)
 	fmt.Println("outFullName string", task.outFullName)
 	fmt.Println("outDurat    string", task.outDurat)
@@ -358,19 +418,21 @@ func checkArgs(args []string) error {
 	}
 	fmt.Println("StatusArg:", args[0], "ok")
 
-	fmt.Println("ResultArg:", args[1])
+	fmt.Println("ResultArg:", args[0])
 
-	_, err := tagname.NewFromFilename(args[1], tagname.CheckNormal)
-	if err != nil {
-		if err.Error() == "\x22sdhd\x22 type does not exist" {
-			return errors.New("Error: Task " + strconv.Itoa(activeTask) + " sdhd tag INVALID")
-		}
-		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " " + err.Error())
-	}
+	// tn, err := tagname.NewFromFilename(args[4], tagname.CheckNormal)
+	// if err != nil {
+	// 	if err.Error() == "\x22sdhd\x22 type does not exist" {
+	// 		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " sdhd tag INVALID")
+	// 	}
+	// 	return errors.New("Error: Task " + strconv.Itoa(activeTask) + " " + err.Error())
+	// }
+
 	// atag, err := tn.GetTag("atag")
 	// if err != nil {
 	// 	return err
 	// }
+	// fmt.Println(atag)
 	//tag, errsdhd := tn.GetTag("sdhd")
 	//fmt.Println("-------------tag", tag)
 	// if errsdhd != nil {
@@ -383,28 +445,34 @@ func checkArgs(args []string) error {
 	if !isTimeStamp(args[2]) {
 		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " - args[2] [" + args[2] + "] is INVALID")
 	}
+
 	if !isTimeStamp(args[3]) {
 		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " - args[3] [" + args[3] + "] is INVALID")
 	}
 
-	if !fileAvailableM(inFolder, args[4]) {
-		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " - args[3] [" + args[4] + "] inFile is not available")
+	if !fileAvailableM(inFolder, args[1]) {
+		return errors.New("Error: Task " + strconv.Itoa(activeTask) + " - args[1] [" + args[1] + "] inFile is not available")
 	}
 
 	return nil
 }
 
+func (t *Task) Status() int {
+	return t.status
+}
+
+func (t *Task) SetStatus(st int) {
+	t.status = st
+}
+
 func main() {
-
 	// file := "word1_word2_partNum_0000__hd_ar2e6_sr"
-
 	// tn, err := tagname.NewFromFilename(file, tagname.CheckNormal)
 	// tag, err2 :=tn.GetTag("atag")
 	// fmt.Println(tag)
 	// fmt.Println(err)
 	// fmt.Println(err2)
 	// return
-
 	preCheck()
 	if !taskFileReadable() {
 		fmt.Println("TaskFile is not readable...")
@@ -412,7 +480,7 @@ func main() {
 		return
 	}
 	for i := 0; i < 1000; i++ {
-		time.Sleep(time.Second * 3)
+		time.Sleep(time.Second)
 		utils.ClearScreen()
 		curTime := time.Now()
 		activeTask = 0
@@ -425,16 +493,8 @@ func main() {
 			fmt.Println("	Task", dl, dataLines[dl])
 			activeTask = dl
 			task := newTask(dataLines[dl])
-			if task.status < 0 {
-				continue
-			}
-			// if err != nil {
-			// 	fmt.Println(task, "-------------------------")
-			// 	continue
-			// }
-			fmt.Println("---------")
-			task.Info()
-			fmt.Println("---------")
+			task.CheckStatus()
+
 		}
 
 	}
@@ -506,11 +566,24 @@ func visit(p string, info os.FileInfo, err error) error {
 }
 
 func fileAvailableM(folder string, file string) bool {
+	fmt.Println("checking:", folder+"\\"+file)
 	err := os.Rename(folder+"\\"+file, folder+"\\"+"RENAMED_"+file)
 	if err != nil {
+		fmt.Println(err.Error())
 		return false
 	}
 	os.Rename(folder+"\\"+"RENAMED_"+file, folder+"\\"+file)
+	return true
+}
+
+func fileAvailable(file string) bool {
+	fmt.Println("checking:", file)
+	err := os.Rename(file, "RENAMED_"+file)
+	if err != nil {
+		fmt.Println(err.Error())
+		return false
+	}
+	os.Rename("RENAMED_"+file, file)
 	return true
 }
 
@@ -559,21 +632,18 @@ TaskCon-5
 */
 
 func videoDuration(folder, file string) string {
-	if fileAvailableM(folder, file) {
-		cmd := exec.Command("ffmpeg", "-i", file)
-
-		output, _ := cmd.CombinedOutput()
-		stringOUT := string(output)
-		str1 := strings.Split(stringOUT, "Duration: ")
-		time.Sleep(time.Second * 1)
-		if len(str1) > 0 {
-			durationSTR := strings.Split(str1[1], ", ")
-			return durationSTR[0]
-		}
+	if !fileAvailableM(folder, file) {
+		return "00:00:00.00"
 	}
-	//cmd.Stdout = os.Stdout
-	//cmd.Stderr = os.Stderr
-	//cmd.Run()
+	cmd := exec.Command("ffmpeg", "-i", folder+"\\"+file)
+	output, _ := cmd.CombinedOutput()
+	stringOUT := string(output)
+	str1 := strings.Split(stringOUT, "Duration: ")
+	time.Sleep(time.Second)
+	if len(str1) > 0 {
+		durationSTR := strings.Split(str1[1], ", ")
+		return ffToPrem(durationSTR[0])
+	}
 	return "00:00:00.00"
 }
 
@@ -677,4 +747,50 @@ func isTimeStamp(arg string) bool {
 	// return false
 	// 	}
 	return match
+}
+
+func loadTaskFileBuffer() []string {
+	return dataLines()
+}
+
+func saveTaskFile(buffer []string) {
+	for i, val := range buffer {
+		utils.EditLineInFile(taskFilePath, i, val)
+	}
+}
+
+func currentTaskArgs(outputName string) ([]string, int) {
+	buffer := loadTaskFileBuffer()
+	args := []string{}
+	iPos := 0
+	for i, val := range buffer {
+		if strings.Contains(val, outputName) {
+			args = dataLineArgs(i)
+			iPos = i
+		}
+	}
+	return args, iPos
+}
+
+func changeStatusTF(argsOld []string, newStatus string) string {
+	argsOld[0] = newStatus
+	return strings.Join(argsOld, " ")
+}
+
+func currentDataLine(outputName string) (data string, num int) {
+	buffer := loadTaskFileBuffer()
+	for i, val := range buffer {
+		if strings.Contains(val, outputName) {
+			return val, i
+		}
+	}
+	return "[LINE NOT FOUND]", -1
+}
+
+func changeStatusInFile(newStatus string, outName string) {
+	args, i := currentTaskArgs(outName)
+	newData := changeStatusTF(args, newStatus)
+	buffer := loadTaskFileBuffer()
+	buffer[i] = newData
+	saveTaskFile(buffer)
 }
