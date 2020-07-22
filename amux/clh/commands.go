@@ -9,14 +9,33 @@ import (
 
 func main() {
 	args := readArgs()
+
+	kaSl := KeyArgs()
+	fmt.Println(kaSl)
+	fmt.Println("---------")
+	test := "123456789"
+	fmt.Println(string(test[0]))
+
 	if len(args) < 2 {
 		fmt.Println("No args... Exit")
 		return
 	}
-	cmd := newComand(f3, "Name", args...)
+	var cmd comand
+	switch args[0] {
+	default:
+		fmt.Println("Key is not in White list")
+		os.Exit(1)
+	case "-Sum":
+		cmd = newComand(plus, args[0], args[1:]...)
+	case "-Minus":
+		cmd = newComand(minus, args[0], args[1:]...)
+	}
 	fmt.Println(cmd)
-	cmd.run()
-
+	res, err := cmd.run()
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(res)
 }
 
 type argSet struct {
@@ -53,9 +72,10 @@ func newComand(f func(interface{}) (interface{}, error), name string, args ...st
 	return cmd
 }
 
-func (cmd *comand) run() {
+func (cmd *comand) run() (interface{}, error) {
 	fn := cmd.bindedFunctionName
-	fn(cmd.comandArguments)
+	output, err := fn(cmd.comandArguments)
+	return output, err
 }
 
 func plus(argsFeeder interface{}) (interface{}, error) {
@@ -64,23 +84,37 @@ func plus(argsFeeder interface{}) (interface{}, error) {
 	default:
 		return nil, errors.New(fmt.Sprintf("Wrong Argument Type: func f3f, args: %d", argsFeeder))
 	case []string:
-		for i := range argsFeeder.([]string) {
-			d, err := strconv.Atoi(argsFeeder.([]string)[i])
-			if err != nil {
-				panic(errors.New(fmt.Sprintf("Wrong Argument Type: func f3f, args: %d", argsFeeder)))
-			}
-			input = append(input, d)
-		}
+		input = toInts(argsFeeder.([]string))
 	}
-	fmt.Println("start f3f")
-	var res []int
+	fmt.Println("Args =", input)
+	var res int
 	for i := range input {
-		fmt.Println("f3f add arg", i)
-		res = append(res, input[i]+1)
+		fmt.Println("add", input[i])
+		res = res + input[i]
 	}
-	fmt.Println("f3f executed")
-	fmt.Println(res, nil)
-	fmt.Println(" ")
+	fmt.Println("Result:", res)
+	return res, nil
+}
+
+func minus(argsFeeder interface{}) (interface{}, error) {
+	var input []int
+	switch argsFeeder.(type) {
+	default:
+		return nil, errors.New(fmt.Sprintf("Wrong Argument Type: func f3f, args: %d", argsFeeder))
+	case []string:
+		input = toInts(argsFeeder.([]string))
+	}
+	fmt.Println("Args =", input)
+	var res int
+	for i := range input {
+		if i == 0 {
+			res = input[i]
+			continue
+		}
+		fmt.Println("sub", input[i])
+		res = res - input[i]
+	}
+	fmt.Println("Result:", res)
 	return res, nil
 }
 
@@ -142,6 +176,11 @@ amux -i file.mp4 -ss 00:00:02:00 -t 00:20:00:00 -setoutput hd_ar6e2
 Perri_meyson_s01e05_SER_09493_AUDIORUS51.m4a
 Perri_meyson_s01e05_SER_09493_HD.mp4
 
+
+
+
+
+amux -i file.mp4 -ss 00:00:02:00 -t 00:20:00:00 -setoutput hd_ar6e2
 
 
 */
